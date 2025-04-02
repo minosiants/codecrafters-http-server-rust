@@ -3,7 +3,7 @@ use bytes::BufMut;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::combinator::{map, map_parser, map_res, rest, value};
-use nom::{IResult, Parser};
+use nom::{AsBytes, IResult, Parser};
 use nom::bytes::{is_not, take_until, take_while};
 use nom::character::complete::{crlf, space1};
 use nom::character::streaming::anychar;
@@ -56,15 +56,53 @@ struct Host(String);
 struct UserAgent(String);
 #[derive(Debug, Clone)]
 struct Accept(String);
+#[derive(Debug, Clone)]
+pub enum ContentType {
+    TextPlain
+}
+
+impl From<ContentType> for Vec<u8> {
+    fn from(value: ContentType) -> Self {
+        match value {
+            ContentType::TextPlain => b"text/plain".to_vec()
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct ContentLength(pub u32);
 
 #[derive(Debug, Clone)]
 pub enum Header {
     Host(Host),
     UserAgent(UserAgent),
     Accept(Accept),
+    ContentType(ContentType),
+    ContentLength(ContentLength)
 }
-#[derive(Debug, Clone, Copy)]
-pub struct ResponseBody {}
+impl From<Header> for Vec<u8> {
+    fn from(value: Header) -> Self {
+        match value {
+            Header::Host(host) => format!("Host: {:?}",host.0 ).as_bytes().to_vec(),
+            Header::UserAgent(agent) => format!("User-Agent: {:?}", agent.0).as_bytes().to_vec(),
+            Header::Accept(accept) => format!("Accept: {:?}", accept.0).as_bytes().to_vec(),
+            Header::ContentType(ct) => {
+                let mut r:Vec<u8> = b"Content-Type: ".to_vec();
+                let ctv:Vec<u8> = ct.into();
+                r.extend(ctv);
+                r
+            }
+            Header::ContentLength(cl) => format!("Content-Length:{:?}", cl.0).as_bytes().to_vec()
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct ResponseBody(pub String);
+
+impl From<ResponseBody> for Vec<u8> {
+    fn from(value: ResponseBody) -> Self {
+        value.0.as_bytes().to_vec()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct StatusLine(
@@ -118,7 +156,26 @@ impl From<Response> for Vec<u8> {
         let mut result: Vec<u8> = vec![];
         result.extend::<Vec<u8>>(status_line.into());
         result.extend(CRLF);
+
+        let headers_b:Vec<u8>= headers.into_iter().rfold(vec![], |mut v:Vec<u8>,el|{
+            let el:Vec<u8> = el.into();
+            v.extend(el);
+            v.extend(CRLF);
+            v
+        });
+        if headers_b.is_empty(){
+            result.extend(CRLF);
+        } else {
+            result.extend(headers_b);
+        }
         result.extend(CRLF);
+        body.into_iter().for_each(
+            |b| {
+                let v:Vec<u8> = b.into();
+                result.extend(v)
+            }
+        );
+
         result
     }
 }

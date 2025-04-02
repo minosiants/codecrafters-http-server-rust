@@ -2,8 +2,8 @@ use std::io::{BufReader, Read, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
-use codecrafters_http_server::{Request, RequestTarget, Response, StatusLine};
-
+use codecrafters_http_server::{ContentType, Header, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody};
+use regex::Regex;
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut reader = BufReader::new(stream);
@@ -40,18 +40,30 @@ fn main() {
         match stream {
 
             Ok(mut stream) => {
-                let mut req: Vec<u8> = vec![];
+
+                fn get_path(v:&str) -> String {
+                    let req_path = Regex::new(r"^/\w+/(?<path>\w+)").unwrap();
+                    let r = req_path.captures(v).unwrap();
+                    r["path"].to_string()
+                }
+
                 let req = read_request(&mut stream).unwrap();
 
                 let request = Request::parse(req.as_slice()).unwrap();
                 println!("request: {:?}", &request);
                 let response:Vec<u8> = match  request.target().0.as_str() {
                     "/" => Response(StatusLine::ok(), vec![], None),
-                    _ => {
-                        let r = Response(StatusLine::not_found(), vec![], None);
-                        println!("response: {:?}", r);
-                        r
+                    s if s.starts_with("/echo") => {
+                        let path = get_path(s);
+                        Response(StatusLine::ok(),
+                                 vec![Header::ContentType(ContentType::TextPlain),
+                                      Header::ContentLength(ContentLength(path.len() as u32))],
+                                 Some(ResponseBody(path)))
                     }
+                    _ =>
+                        Response(StatusLine::not_found(), vec![], None)
+
+
                     }.into();
 
                 println!("respnse: {:?}", response);
