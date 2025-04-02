@@ -52,17 +52,17 @@ fn main() {
                 let request = Request::parse(req.as_slice()).unwrap();
                 println!("request: {:?}", &request);
                 let response:Vec<u8> = match  request.target().0.as_str() {
-                    "/" => Response(StatusLine::ok(), vec![], None),
+                    "/" => Ok(Response(StatusLine::ok(), vec![], None)),
                     "/user-agent" =>
-                        Response.ok(request.user_agent().map(|v|v.0).get_or_insert("")),
+                        Response::ok(request.user_agent().map(|v|v.0).get_or_insert("".to_string())),
                     s if
                     s.starts_with("/echo") =>
-                        Response.ok(get_path(s)),
+                        Response::ok(get_path(s).as_ref()),
                     _ =>
-                        Response(StatusLine::not_found(), vec![], None)
+                        Ok(Response(StatusLine::not_found(), vec![], None))
 
 
-                    }.into();
+                    }.unwrap().into();
 
                 println!("respnse: {:?}", response);
 
