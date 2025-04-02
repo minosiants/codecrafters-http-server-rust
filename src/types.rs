@@ -53,7 +53,7 @@ impl From<Reason> for Vec<u8> {
 #[derive(Debug, Clone)]
 struct Host(String);
 #[derive(Debug, Clone)]
-struct UserAgent(String);
+pub struct UserAgent(pub String);
 #[derive(Debug, Clone)]
 struct Accept(String);
 #[derive(Debug, Clone)]
@@ -147,7 +147,14 @@ pub struct Response(
     pub Vec<Header>,
     pub Option<ResponseBody>);
 
-
+impl Response {
+    pub fn ok(body:&str) -> Result<Self> {
+        Ok(Response(StatusLine::ok(),
+                 vec![Header::ContentType(ContentType::TextPlain),
+                      Header::ContentLength(ContentLength(body.len() as u32))],
+                 Some(ResponseBody(body.to_string()))))
+    }
+}
 const CRLF: &[u8; 2] = b"\r\n";
 const SPACE: &[u8; 1] = b" ";
 impl From<Response> for Vec<u8> {
@@ -189,6 +196,12 @@ pub struct Request {
 impl Request {
     pub fn target(&self) -> RequestTarget {
         self.request_line.1.clone()
+    }
+    pub fn user_agent(&self) -> Option<UserAgent> {
+        self.headers.clone().into_iter().find_map(|v| match v {
+            Header::UserAgent(v) => Some(v.clone()),
+            _ => None
+        })
     }
     pub fn parse(input:&[u8]) -> Result<Self> {
         let res = map(

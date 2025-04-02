@@ -53,13 +53,11 @@ fn main() {
                 println!("request: {:?}", &request);
                 let response:Vec<u8> = match  request.target().0.as_str() {
                     "/" => Response(StatusLine::ok(), vec![], None),
-                    s if s.starts_with("/echo") => {
-                        let path = get_path(s);
-                        Response(StatusLine::ok(),
-                                 vec![Header::ContentType(ContentType::TextPlain),
-                                      Header::ContentLength(ContentLength(path.len() as u32))],
-                                 Some(ResponseBody(path)))
-                    }
+                    "/user-agent" =>
+                        Response.ok(request.user_agent().map(|v|v.0).get_or_insert("")),
+                    s if
+                    s.starts_with("/echo") =>
+                        Response.ok(get_path(s)),
                     _ =>
                         Response(StatusLine::not_found(), vec![], None)
 
