@@ -2,6 +2,8 @@ use std::io::{BufReader, Read, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::thread;
+use std::thread::Thread;
 use codecrafters_http_server::{ContentType, Header, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody};
 use regex::Regex;
 
@@ -37,6 +39,7 @@ fn main() {
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
+        thread::spawn( move ||
         match stream {
 
             Ok(mut stream) => {
@@ -64,14 +67,13 @@ fn main() {
 
                     }.unwrap().into();
 
-                println!("respnse: {:?}", response);
-
                stream.write(response.as_ref()).unwrap();
                //stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);
             }
-        }
+        });
+            ()
     }
 }
