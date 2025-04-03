@@ -1,10 +1,11 @@
+use std::fs::File;
 use std::io::{BufReader, Read, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::thread;
 use std::thread::Thread;
-use codecrafters_http_server::{ContentType, Header, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody};
+use codecrafters_http_server::{ContentType, Header, Result, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody, Context};
 use regex::Regex;
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
@@ -61,6 +62,19 @@ fn main() {
                     s if
                     s.starts_with("/echo") =>
                         Response::ok(get_path(s).as_ref()),
+                    s if s.starts_with("/files") => {
+                        let file_name = request.get_path();
+                        let file = format!("/tmp/data/codecrafters.io/http-server-tester/{}", file_name);
+                        println!("file: {:?}", file);
+                        match read(file.as_ref()){
+                            Ok(data) => {
+                                Response::ok_bin(data.as_slice())
+                            }
+                            Err(_) =>
+                                Ok(Response(StatusLine::not_found(), vec![], None))
+
+                        }
+                    }
                     _ =>
                         Ok(Response(StatusLine::not_found(), vec![], None))
 
@@ -76,4 +90,12 @@ fn main() {
         });
             ()
     }
+}
+
+
+pub fn read(path: &str) -> Result<Vec<u8>> {
+    let mut file = File::open(path).context("Open file {path}")?; // Open the file
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).context("Reading file")?; // Read file contents into buffer
+    Ok(buffer)
 }

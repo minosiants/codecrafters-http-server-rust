@@ -8,6 +8,7 @@ use nom::bytes::{is_not, take_until, take_while};
 use nom::character::complete::{crlf, space1};
 use nom::character::streaming::anychar;
 use nom::multi::many0;
+use regex::Regex;
 use crate::{Error, Result};
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum HttpVersion {
@@ -58,13 +59,15 @@ pub struct UserAgent(pub String);
 struct Accept(String);
 #[derive(Debug, Clone)]
 pub enum ContentType {
-    TextPlain
+    TextPlain,
+    OctetStream
 }
 
 impl From<ContentType> for Vec<u8> {
     fn from(value: ContentType) -> Self {
         match value {
-            ContentType::TextPlain => b"text/plain".to_vec()
+            ContentType::TextPlain => b"text/plain".to_vec(),
+            ContentType::OctetStream => b"application/octet-stream".to_vec()
         }
     }
 }
@@ -154,6 +157,12 @@ impl Response {
                       Header::ContentLength(ContentLength(body.len() as u32))],
                  Some(ResponseBody(body.to_string()))))
     }
+    pub fn ok_bin(body:&[u8]) -> Result<Self> {
+        Ok(Response(StatusLine::ok(),
+                    vec![Header::ContentType(ContentType::OctetStream),
+                         Header::ContentLength(ContentLength(body.len() as u32))],
+                    Some(ResponseBody(String::from_utf8(body.to_vec())?))))
+    }
 }
 const CRLF: &[u8; 2] = b"\r\n";
 const SPACE: &[u8; 1] = b" ";
@@ -203,6 +212,13 @@ impl Request {
             _ => None
         })
     }
+    pub fn get_path(&self) -> String {
+        let p = self.target().0.clone();
+        let req_path = Regex::new(r"^/\w+/(?<path>\w+)").unwrap();
+
+        let r = req_path.captures(p.as_str()).unwrap();
+        r["path"].to_string()
+    }
     pub fn parse(input:&[u8]) -> Result<Self> {
         let res = map(
             (parse_request_line,
@@ -231,6 +247,12 @@ enum HttpMethod {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestTarget(pub String);
+
+impl RequestTarget {
+    pub fn start_with(&self, prefix:&str) -> bool {
+        self.0.starts_with(prefix)
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 struct RequestLine(HttpMethod, RequestTarget, HttpVersion);
 
