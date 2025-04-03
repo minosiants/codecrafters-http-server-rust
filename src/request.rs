@@ -1,10 +1,10 @@
 use std::io::{BufReader, Read};
 use std::net::TcpStream;
-use derive_more::{Deref, From};
+use derive_more::{Deref, From, Into};
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::bytes::{is_not, take_until};
-use nom::character::complete::{crlf, space1};
+use nom::character::complete::{crlf, space1, u32};
 use nom::combinator::{map, map_parser, rest};
 use nom::{IResult, Parser};
 use nom::multi::many0;
@@ -65,7 +65,9 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
     let content_type = (tag(&b"Content-Type: "[..]),rest).map_res(
         to_string(|v| ContentType::from2(v.as_str()).map(Header::content_type))
     );
-    let content_length = (tag(&b"Content-Length: "[..]), be_u32).map_res(|(_, i)| Result::Ok(Header::content_length(i)));
+    let content_length = (tag(&b"Content-Length: "[..]), rest)
+        .map_res(to_string(|v| Result::Ok(Header::content_length(v.parse().unwrap()))));
+
 
     many0(
         map(
@@ -84,7 +86,7 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
     ).parse(input)
 }
 
-#[derive(Debug, Clone, From, Deref)]
+#[derive(Debug, Clone, From, Deref, Into)]
 pub struct RequestBody(Vec<u8>);
 
 #[derive(Debug, Clone)]
@@ -116,12 +118,21 @@ impl Request {
     }
     pub fn read(stream: &mut TcpStream) -> Result<Self> {
         let input = Self::read_request(stream)?;
+        println!("input size {:?}", input.len());
         fn read_body(cl: Option<ContentLength>, s:&mut TcpStream) -> Option<RequestBody> {
             let content_length  = cl?;
+            println!("content length: {:?}", content_length);
             let mut buf = vec![0; *content_length as usize];
+            println!("buf size {:?}", buf.len());
             match s.read_exact(&mut buf) {
-                Ok(_) => {Some(RequestBody(buf))}
-                Err(_) => {None}
+                Ok(_) => {
+
+                    Some(RequestBody(buf))
+                }
+                Err(e) => {
+                    println!("problem to read {:?}", e);
+                    None
+                }
             }
 
         }
@@ -129,16 +140,17 @@ impl Request {
             (parse_request_line,
              crlf,
              parse_headers,
-             crlf
+             crlf,
+             rest
             ),
-            |(request_line, _, headers, _)| {
+            |(request_line, _, headers, _, body)| {
                 let h:Headers = headers.into();
                 let cl = h.content_length();
-                Request { request_line, headers:h, body: read_body(cl, stream) }
+                Request { request_line, headers:h, body: Some(RequestBody(body.to_vec())) }
             },
         ).parse(&input);
         match res {
-            Ok((_, request)) => Ok(request),
+            Ok((rest, request)) => Ok(request),
             Err(e) => {
                 println!("Error {:?}", e);
                 Err(Error::GeneralError("Parser error".to_string()))
@@ -178,7 +190,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decode_request() -> crate::Result<()> {
+    fn test_decode_request_get() -> crate::Result<()> {
         let req = b"GET /index.html HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
         let result =
             map(
@@ -193,6 +205,29 @@ mod tests {
 
         println!("resel {:?}", result);
         Ok(())
+    }
+
+    #[test]
+    fn test_decod_request_post() -> Result<()> {
+
+        let req = b"POST /files/orange_pear_banana_strawberry HTTP/1.1\r\nHost: localhost:4221\r\nContent-Length: 63\r\nContent-Type: application/octet-stream\r\n\r\n";
+        let result =
+            map(
+                (parse_request_line,
+                 crlf,
+                 parse_headers,
+                 crlf
+                ),
+                |(request_line, _, headers, _)|
+                Request { request_line, headers:headers.into(), body: None },
+            ).parse(req);
+        println!("resel {:?}", result);
+        Ok(())
+    }
+    #[test]
+    fn bla() -> Result<()> {
+        let l = b"POST /files/orange_pear_orange_mango HTTP/1.1\r\nHost: localhost:4221\r\nContent-Length: 62\r\nContent-Type: application/octet-stream\r\n\r\nstrawberry banana mango apple orange pineapple apple raspberry";
+
     }
 }
 

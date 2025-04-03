@@ -53,7 +53,7 @@ fn main() {
                                 }
                             }
                             HttpMethod::Post => {
-                                match write(file, request.body()) {
+                                match write(file.as_ref(), request.body().unwrap().into()) {
                                     Ok(_) => {
                                         Ok(Response(StatusLine::created(), vec![], None))
                                     }

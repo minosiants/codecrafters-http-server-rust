@@ -176,8 +176,8 @@ impl StatusLine {
     pub fn created() -> StatusLine {
         Self(
             HttpVersion::HttpOne,
-            StatusCode::SC200,
-            Some(Reason::Ok),
+            StatusCode::SC201,
+            Some(Reason::Created),
         )
     }
     pub fn not_found() -> StatusLine {
