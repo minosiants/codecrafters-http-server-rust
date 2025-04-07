@@ -10,6 +10,7 @@ use nom::combinator::{map, map_parser, rest};
 use nom::multi::many0;
 use derive_more::{Deref, From};
 use crate::{Error, Result};
+use crate::Error::GeneralError;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HttpVersion {
@@ -88,6 +89,26 @@ impl From<ContentType> for Vec<u8> {
 #[derive(Debug, Clone,From, Deref, Copy, PartialEq)]
 pub struct ContentLength(u32);
 
+#[derive(Debug, Clone,From, Copy, PartialEq)]
+pub enum Encoding {
+    Gzip
+}
+
+impl Encoding {
+    pub fn from(value:&str) -> Result<Self> {
+        match value {
+            "gzip" => Ok(Encoding::Gzip),
+            _ => Err(GeneralError(format!("Unsuported encoding {}", value)))
+        }
+    }
+}
+
+
+
+#[derive(Debug, Clone,From, Deref, Copy, PartialEq)]
+pub struct AcceptEncoding(Encoding);
+#[derive(Debug, Clone,From, Deref, Copy, PartialEq)]
+pub struct ContentEncoding(Encoding);
 #[derive(Debug, Clone,From, PartialEq)]
 #[from(forward)]
 pub enum Header {
@@ -95,7 +116,9 @@ pub enum Header {
     UserAgent(UserAgent),
     Accept(Accept),
     ContentType(ContentType),
-    ContentLength(ContentLength)
+    ContentLength(ContentLength),
+    AcceptEncoding(AcceptEncoding),
+    ContentEncoding(ContentEncoding)
 }
 impl Header {
     pub fn host(value:&str) -> Self {
@@ -113,6 +136,12 @@ impl Header {
     pub fn content_length(value:u32) -> Self {
         Self::ContentLength(ContentLength(value))
     }
+    pub fn accept_encoding(value:Encoding) -> Self {
+        Self::AcceptEncoding(AcceptEncoding(value))
+    }
+    pub fn content_encoding(value:Encoding) -> Self {
+        Self::ContentEncoding(ContentEncoding(value))
+    }
 }
 impl From<Header> for Vec<u8> {
     fn from(value: Header) -> Self {
@@ -126,7 +155,19 @@ impl From<Header> for Vec<u8> {
                 r.extend(ctv);
                 r
             }
-            Header::ContentLength(cl) => format!("Content-Length:{:?}", cl.0).as_bytes().to_vec()
+            Header::ContentLength(cl) => format!("Content-Length:{:?}", cl.0).as_bytes().to_vec(),
+            Header::AcceptEncoding(encoding) => {
+                let enc = match encoding.0 {
+                    Encoding::Gzip => "gzip"
+                };
+                format!("Accept-Encoding:{:?}", enc).as_bytes().to_vec()
+            },
+            Header::ContentEncoding(encoding) => {
+                let enc = match encoding.0 {
+                    Encoding::Gzip => "gzip"
+                };
+                format!("Content-Encoding:{:?}", enc).as_bytes().to_vec()
+            }
         }
     }
 }
@@ -145,6 +186,12 @@ impl Headers {
     pub fn user_agent(&self) -> Option<UserAgent> {
         self.clone().0.into_iter().find_map(|v| match v {
             Header::UserAgent(v) => Some(v.clone()),
+            _ => None
+        })
+    }
+    pub fn accept_encoding(&self) -> Option<AcceptEncoding> {
+        self.clone().0.into_iter().find_map(|v| match v {
+            Header::AcceptEncoding(v) => Some(v),
             _ => None
         })
     }

@@ -10,7 +10,7 @@ use nom::{IResult, Parser};
 use nom::multi::many0;
 use nom::number::complete::be_u32;
 use regex::Regex;
-use crate::{Error, Header, ResponseBody, UserAgent, Result, ContentType, Headers, ContentLength, HttpMethod, Reason};
+use crate::{Error, Header, ResponseBody, UserAgent, Result, ContentType, Headers, ContentLength, HttpMethod, Reason, Encoding};
 
 
 #[derive(Debug, Clone, PartialEq, From, Deref)]
@@ -26,8 +26,8 @@ struct RequestLine(crate::types::HttpMethod, RequestTarget, crate::types::HttpVe
 
 fn parse_http_method(input: &[u8]) -> IResult<&[u8], crate::types::HttpMethod> {
     alt((
-        map(tag(&b"GET"[..]), |_| crate::types::HttpMethod::Get),
-        map(tag(&b"POST"[..]), |_| crate::types::HttpMethod::Post)
+        map(tag(&b"GET"[..]), |_| HttpMethod::Get),
+        map(tag(&b"POST"[..]), |_| HttpMethod::Post)
     )).parse(input)
 }
 
@@ -62,11 +62,17 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
         .map_res(to_string(|v| Ok(Header::user_agent(v.as_str()))));
 
     let accept = (tag(&b"Accept: "[..]), rest).map_res(to_string(|v| Ok(Header::accept(v.as_str()))));
-    let content_type = (tag(&b"Content-Type: "[..]),rest).map_res(
+    let content_type = (tag(&b"Content-Type: "[..]), rest).map_res(
         to_string(|v| ContentType::from2(v.as_str()).map(Header::content_type))
     );
     let content_length = (tag(&b"Content-Length: "[..]), rest)
-        .map_res(to_string(|v| Result::Ok(Header::content_length(v.parse().unwrap()))));
+        .map_res(to_string(|v| Ok(Header::content_length(v.parse()?))));
+
+    let content_encoding = (tag(&b"Content-Encoding: "[..]), rest)
+        .map_res(to_string(|v| Ok(Header::content_encoding(Encoding::from(v.as_str())?))));
+
+    let accept_encoding = (tag(&b"Accept-Encoding: "[..]), rest)
+        .map_res(to_string(|v| Ok(Header::accept_encoding(Encoding::from(v.as_str())?))));
 
 
     many0(
@@ -77,7 +83,9 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
                      user_agent,
                      accept,
                      content_type,
-                     content_length)
+                     content_length,
+                     content_encoding,
+                     accept_encoding)
                 )),
              tag(&b"\r\n"[..])
             ),
@@ -116,17 +124,16 @@ impl Request {
     pub fn body(&self) -> Option<RequestBody> {
         self.body.clone()
     }
+    pub fn headers(&self) -> &Headers {
+        &self.headers
+    }
     pub fn read(stream: &mut TcpStream) -> Result<Self> {
         let input = Self::read_request(stream)?;
-        println!("input size {:?}", input.len());
-        fn read_body(cl: Option<ContentLength>, s:&mut TcpStream) -> Option<RequestBody> {
-            let content_length  = cl?;
-            println!("content length: {:?}", content_length);
+        fn read_body(cl: Option<ContentLength>, s: &mut TcpStream) -> Option<RequestBody> {
+            let content_length = cl?;
             let mut buf = vec![0; *content_length as usize];
-            println!("buf size {:?}", buf.len());
             match s.read_exact(&mut buf) {
                 Ok(_) => {
-
                     Some(RequestBody(buf))
                 }
                 Err(e) => {
@@ -134,7 +141,6 @@ impl Request {
                     None
                 }
             }
-
         }
         let res = map(
             (parse_request_line,
@@ -144,9 +150,9 @@ impl Request {
              rest
             ),
             |(request_line, _, headers, _, body)| {
-                let h:Headers = headers.into();
+                let h: Headers = headers.into();
                 let cl = h.content_length();
-                Request { request_line, headers:h, body: Some(RequestBody(body.to_vec())) }
+                Request { request_line, headers: h, body: Some(RequestBody(body.to_vec())) }
             },
         ).parse(&input);
         match res {
@@ -181,8 +187,6 @@ impl Request {
 }
 
 
-
-
 #[cfg(test)]
 mod tests {
     use nom::character::complete::crlf;
@@ -200,7 +204,7 @@ mod tests {
                  crlf
                 ),
                 |(request_line, _, headers, _)|
-                Request { request_line, headers:headers.into(), body: None },
+                Request { request_line, headers: headers.into(), body: None },
             ).parse(req);
 
         println!("resel {:?}", result);
@@ -209,7 +213,6 @@ mod tests {
 
     #[test]
     fn test_decod_request_post() -> Result<()> {
-
         let req = b"POST /files/orange_pear_banana_strawberry HTTP/1.1\r\nHost: localhost:4221\r\nContent-Length: 63\r\nContent-Type: application/octet-stream\r\n\r\n";
         let result =
             map(
@@ -219,7 +222,7 @@ mod tests {
                  crlf
                 ),
                 |(request_line, _, headers, _)|
-                Request { request_line, headers:headers.into(), body: None },
+                Request { request_line, headers: headers.into(), body: None },
             ).parse(req);
         println!("resel {:?}", result);
         Ok(())
@@ -228,6 +231,8 @@ mod tests {
     fn bla() -> Result<()> {
         let l = b"POST /files/orange_pear_orange_mango HTTP/1.1\r\nHost: localhost:4221\r\nContent-Length: 62\r\nContent-Type: application/octet-stream\r\n\r\nstrawberry banana mango apple orange pineapple apple raspberry";
 
+        Ok(())
     }
 }
+
 

@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::num::ParseIntError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::sync::Arc;
@@ -21,7 +22,13 @@ pub enum Error {
     #[error("Failed to convert bytes to string: {0}")]
     FromUtf8ConversionError(#[from] FromUtf8Error),
     #[error("Failed to convert bytes to string: {0}")]
-    IOError(#[from] std::io::Error)
+    IOError(#[from] std::io::Error),
+    #[error("Failed to convert bytes to string: {0}")]
+    ParseInt(#[from] ParseIntError),
+
+
+
+
 
 
 

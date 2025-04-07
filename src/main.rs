@@ -3,9 +3,10 @@ use std::io::{BufReader, Read, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::thread;
 use std::thread::Thread;
-use codecrafters_http_server::{ContentType, Header, Result, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody, Context, HttpMethod};
+use codecrafters_http_server::{Router, ContentType, Result, Request, RequestTarget, Response, StatusLine, ContentLength, ResponseBody, Context, HttpMethod, get, post, Handler2};
 use regex::Regex;
 
 
@@ -21,61 +22,54 @@ fn main() {
 
     for stream in listener.incoming() {
         thread::spawn( move ||
-        match stream {
-
-            Ok(mut stream) => {
-
-
-                let request = Request::read(&mut stream).unwrap();
+        {
+            match stream {
+                Ok(mut stream) => {
 
 
-
-                println!("request: {:?}", &request);
-                let response:Vec<u8> = match  request.target().as_str() {
-                    "/" => Ok(Response(StatusLine::ok(), vec![], None)),
-                    "/user-agent" =>
-                        Response::ok(request.user_agent().map(|v|v.0).get_or_insert("".to_string())),
-                    s if
-                    s.starts_with("/echo") =>
-                        Response::ok(request.get_path().as_str()),
-                    s if s.starts_with("/files") => {
-                        let file_name = request.get_path();
-                        let file = format!("/tmp/data/codecrafters.io/http-server-tester/{}", file_name);
-                        match request.http_method() {
-                            HttpMethod::Get => {
-                                match read(file.as_ref()){
-                                    Ok(data) => {
-                                        Response::ok_bin(data.as_slice())
-                                    }
-                                    Err(_) =>
-                                        Ok(Response(StatusLine::not_found(), vec![], None))
-
+                    let request = Request::read(&mut stream).unwrap();
+                    let mut router = Router::new();
+                    let router = router
+                        .route("/", get(Arc::new(|_: &Request| Ok(Response(StatusLine::ok(), vec![], None)))))
+                        .route("/user-agent", get(Arc::new(|request: &Request| Response::ok(request.user_agent().map(|v| v.0).get_or_insert("".to_string())))))
+                        .route("/echo", get(Arc::new(|request: &Request| Response::ok(request.get_path().as_str()))))
+                        .route("/files", get(Arc::new(|request: &Request| {
+                            let file = format!("/tmp/data/codecrafters.io/http-server-tester/{}", request.get_path());
+                            match read(file.as_ref()) {
+                                Ok(data) => {
+                                    Response::ok_bin(data.as_slice())
+                                }
+                                Err(_) =>
+                                    Ok(Response(StatusLine::not_found(), vec![], None))
+                            }
+                        })))
+                        .route("/file", post(Arc::new(|request: &Request| {
+                            let file = format!("/tmp/data/codecrafters.io/http-server-tester/{}", request.get_path());
+                            match write(file.as_ref(), request.body().unwrap().into()) {
+                                Ok(_) => {
+                                    Ok(Response(StatusLine::created(), vec![], None))
+                                }
+                                Err(_) => {
+                                    Ok(Response(StatusLine::created(), vec![], None))
                                 }
                             }
-                            HttpMethod::Post => {
-                                match write(file.as_ref(), request.body().unwrap().into()) {
-                                    Ok(_) => {
-                                        Ok(Response(StatusLine::created(), vec![], None))
-                                    }
-                                    Err(_) => {
-                                        Ok(Response(StatusLine::created(), vec![], None))
-                                    }
-                                }
-                            }
+                        })));
+
+                    println!("request: {:?}", &request);
+                    let response: Vec<u8> = match router.find_route(&(*request.target()), request.http_method()) {
+                        None => Ok(Response(StatusLine::not_found(), vec![], None)),
+                        Some(handler) => {
+                            let h = Arc::clone(&handler);
+                            h.handle(&request)
                         }
-
-                    }
-                    _ =>
-                        Ok(Response(StatusLine::not_found(), vec![], None))
-
-
                     }.unwrap().into();
 
-               stream.write(response.as_ref()).unwrap();
-               //stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).unwrap();
-            }
-            Err(e) => {
-                println!("error: {}", e);
+                    stream.write(response.as_ref()).unwrap();
+                    //stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).unwrap();
+                }
+                Err(e) => {
+                    println!("error: {}", e);
+                }
             }
         });
             ()
