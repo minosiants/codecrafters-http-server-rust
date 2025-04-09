@@ -1,15 +1,12 @@
+use crate::Error::ErrorWrapper;
 use std::fmt::Display;
 use std::num::ParseIntError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::sync::Arc;
-use nom::error::ParseError;
 use thiserror::Error;
-use nom::Err as NomErr;
-use crate::Error::ErrorWrapper;
 
 pub type Result<E> = std::result::Result<E, Error>;
-
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -23,15 +20,8 @@ pub enum Error {
     FromUtf8ConversionError(#[from] FromUtf8Error),
     #[error("Failed to convert bytes to string: {0}")]
     IOError(#[from] std::io::Error),
-    #[error("Failed to convert bytes to string: {0}")]
+    #[error("Parser error: {0}")]
     ParseInt(#[from] ParseIntError),
-
-
-
-
-
-
-
 }
 
 pub trait Context<T, E> {
