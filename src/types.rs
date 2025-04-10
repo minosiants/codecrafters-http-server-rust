@@ -1,7 +1,6 @@
 use crate::Error::GeneralError;
 use crate::{Error, Result};
 use derive_more::{Deref, From};
-use nom::{AsBytes, Parser};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HttpVersion {
@@ -48,12 +47,12 @@ impl From<Reason> for Vec<u8> {
 }
 
 #[derive(Debug, Clone, From, Deref, PartialEq)]
-struct Host(String);
+pub struct Host(String);
 
 #[derive(Debug, Clone, From, Deref, PartialEq)]
 pub struct UserAgent(pub String);
 #[derive(Debug, Clone, From, Deref, PartialEq)]
-struct Accept(String);
+pub struct Accept(String);
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
     TextPlain,
@@ -196,14 +195,27 @@ impl Headers {
     }
 }
 #[derive(Debug, Clone)]
-pub struct ResponseBody(pub String);
+pub struct ResponseBody(pub Vec<u8>);
 
 impl From<ResponseBody> for Vec<u8> {
     fn from(value: ResponseBody) -> Self {
-        value.0.as_bytes().to_vec()
+        value.0
     }
 }
 
+impl<'a> From<&'a ResponseBody> for &'a [u8] {
+    fn from(value: &'a ResponseBody) -> Self {
+        value.0.as_ref()
+    }
+}
+
+impl TryInto<ResponseBody> for Vec<u8> {
+    type Error = Error;
+
+    fn try_into(self) -> Result<ResponseBody> {
+        Ok(ResponseBody(self))
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct StatusLine(HttpVersion, StatusCode, Option<Reason>);
 
@@ -253,7 +265,7 @@ impl Response {
                 Header::ContentType(ContentType::TextPlain),
                 Header::ContentLength(ContentLength(body.len() as u32)),
             ],
-            Some(ResponseBody(body.to_string())),
+            Some(ResponseBody(body.as_bytes().to_vec())),
         ))
     }
     pub fn ok_bin(body: &[u8]) -> Result<Self> {
@@ -263,12 +275,29 @@ impl Response {
                 Header::ContentType(ContentType::OctetStream),
                 Header::ContentLength(ContentLength(body.len() as u32)),
             ],
-            Some(ResponseBody(String::from_utf8(body.to_vec())?)),
+            Some(ResponseBody(body.to_vec())),
         ))
     }
     pub fn add_header(&mut self, header: Header) -> &Self {
         self.1.push(header);
         self
+    }
+    pub fn with_body(&self, f: impl Fn(&ResponseBody) -> ResponseBody) -> Self {
+        let Response(status_line, headers, body) = self;
+        match body {
+            None => Self(*status_line, headers.clone(), None),
+            Some(b) => {
+                let rb = f(b);
+                let headers = headers
+                    .iter()
+                    .map(|h| match h {
+                        Header::ContentLength(_) => Header::content_length(rb.0.len() as u32),
+                        h => h.clone(),
+                    })
+                    .collect();
+                Self(*status_line, headers, Some(rb))
+            }
+        }
     }
 }
 const CRLF: &[u8; 2] = b"\r\n";

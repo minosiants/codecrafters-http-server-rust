@@ -5,6 +5,12 @@ pub struct Router<'a> {
     routes: Vec<(&'a str, HttpMethod, BoxedHandler)>,
 }
 
+impl<'a> Default for Router<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> Router<'a> {
     pub fn new() -> Self {
         Self { routes: Vec::new() }
