@@ -83,16 +83,16 @@ fn main() {
                         Some(handler) => {
                             let h = Arc::clone(&handler);
                             let mut r = h.handle(&request).unwrap();
-                            if let Some(AcceptEncoding(Encoding::Gzip)) =
-                                request.headers().accept_encoding()
-                            {
-                                Ok((r
+
+                            match request.headers().accept_encoding() {
+                                Some(ae) if ae.has_gzip() => Ok((r
                                     .add_header(Header::content_encoding(Encoding::Gzip))
                                     .clone())
-                                .into())
-                            } else {
-                                println!("response: {:?}", r);
-                                Ok(r.into())
+                                .into()),
+                                _ => {
+                                    println!("response: {:?}", r);
+                                    Ok(r.into())
+                                }
                             }
                         }
                     };

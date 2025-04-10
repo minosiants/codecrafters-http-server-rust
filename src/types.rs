@@ -96,8 +96,14 @@ impl Encoding {
     }
 }
 
-#[derive(Debug, Clone, From, Deref, Copy, PartialEq)]
-pub struct AcceptEncoding(pub Encoding);
+#[derive(Debug, Clone, From, Deref, PartialEq)]
+pub struct AcceptEncoding(pub Vec<Encoding>);
+
+impl AcceptEncoding {
+    pub fn has_gzip(&self) -> bool {
+        self.0.contains(&Encoding::Gzip)
+    }
+}
 #[derive(Debug, Clone, From, Deref, Copy, PartialEq)]
 pub struct ContentEncoding(Encoding);
 #[derive(Debug, Clone, From, PartialEq)]
@@ -127,8 +133,8 @@ impl Header {
     pub fn content_length(value: u32) -> Self {
         Self::ContentLength(ContentLength(value))
     }
-    pub fn accept_encoding(value: Encoding) -> Self {
-        Self::AcceptEncoding(AcceptEncoding(value))
+    pub fn accept_encoding(value: &[Encoding]) -> Self {
+        Self::AcceptEncoding(AcceptEncoding(value.to_vec()))
     }
     pub fn content_encoding(value: Encoding) -> Self {
         Self::ContentEncoding(ContentEncoding(value))
@@ -147,10 +153,14 @@ impl From<Header> for Vec<u8> {
                 r
             }
             Header::ContentLength(cl) => format!("Content-Length:{:?}", cl.0).as_bytes().to_vec(),
-            Header::AcceptEncoding(encoding) => {
-                let enc = match encoding.0 {
-                    Encoding::Gzip => "gzip",
-                };
+            Header::AcceptEncoding(AcceptEncoding(encodings)) => {
+                let enc: String = encodings
+                    .into_iter()
+                    .map(|enc| match enc {
+                        Encoding::Gzip => "gzip",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("Accept-Encoding:{}", enc).as_bytes().to_vec()
             }
             Header::ContentEncoding(encoding) => {

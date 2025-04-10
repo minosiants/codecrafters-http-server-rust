@@ -2,17 +2,19 @@ use crate::{
     ContentLength, ContentType, Encoding, Error, Header, Headers, HttpMethod, Result, UserAgent,
 };
 use derive_more::{Deref, From, Into};
-use nom::branch::alt;
-use nom::bytes::complete::tag;
-use nom::bytes::{is_not, take_until};
-use nom::character::complete::{crlf, space1};
-use nom::combinator::{map, map_parser, peek, rest};
-use nom::multi::many0;
-use nom::sequence::preceded;
-use nom::{IResult, Parser};
+use nom::branch::{alt, permutation};
+use nom::bytes::complete::{tag, take_while};
+use nom::bytes::{is_not, take_till, take_until};
+use nom::character::anychar;
+use nom::character::complete::{alpha1, alphanumeric0, crlf, digit0, line_ending, space0, space1};
+use nom::combinator::{map, map_parser, opt, peek, rest};
+use nom::multi::{many0, many1, separated_list0};
+use nom::sequence::{preceded, terminated};
+use nom::{AsChar, IResult, Parser};
 use regex::{Captures, Regex};
 use std::io::{BufReader, Read};
 use std::net::TcpStream;
+use std::string::FromUtf8Error;
 
 #[derive(Debug, Clone, PartialEq, From, Deref)]
 pub struct RequestTarget(String);
@@ -85,25 +87,44 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
         Ok(Some(Header::content_encoding(Encoding::from(v.as_str())?)))
     }));
 
-    let accept_encoding = (tag(&b"Accept-Encoding: "[..]), rest).map_res(to_string(|v| {
-        match Encoding::from(v.as_str()) {
-            Ok(e) => Ok(Some(Header::accept_encoding(e))),
-            Err(_) => Ok(None),
+    let encoding = map(
+        separated_list0(
+            tag(","),
+            preceded(space0, terminated(take_while(|c: u8| c != b','), space0)),
+        ),
+        |v: Vec<&[u8]>| {
+            v.into_iter()
+                .flat_map(|enc| match String::from_utf8(enc.to_vec()) {
+                    Ok(s) => match Encoding::from(s.as_str()) {
+                        Ok(e) => Some(e),
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                })
+        },
+    );
+
+    let accept_encoding = (tag(&b"Accept-Encoding: "[..]), encoding).map_res(|(a, b)| {
+        let bb: Vec<Encoding> = b.collect();
+        if !bb.is_empty() {
+            Ok::<Option<Header>, Error>(Some(Header::accept_encoding(&bb)))
+        } else {
+            Ok(None)
         }
-    }));
+    });
 
     let (input, headers) = many0(map(
         (
             map_parser(
                 take_until(&b"\r\n"[..]),
                 alt((
+                    accept_encoding,
                     host,
                     user_agent,
                     accept,
                     content_type,
                     content_length,
                     content_encoding,
-                    accept_encoding,
                 )),
             ),
             tag(&b"\r\n"[..]),
@@ -266,7 +287,7 @@ mod tests {
     #[test]
     fn test_accept_encoding() -> Result<()> {
         //  let req = b"GET /echo/grape HTTP/1.1\r\nHost: localhost:4221\r\nAccept-Encoding: invalid-encoding\r\n\r\n";
-        let req = b"GET /echo HTTP/1.1\r\nHost: localhost:4221\r\nAccept-Encoding: gzip\r\n\r\n";
+        let req = b"GET /echo/pineapple HTTP/1.1\r\nHost: localhost:4221\r\nAccept-Encoding: encoding-1, gzip, encoding-2\r\n\r\n";
         let result = map(
             (parse_request_line, crlf, parse_headers, crlf),
             |(request_line, _, headers, _)| Request {
@@ -276,6 +297,7 @@ mod tests {
             },
         )
         .parse(req);
+        println!("{:?}", result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().1.get_route(), "/echo".to_string());
 
