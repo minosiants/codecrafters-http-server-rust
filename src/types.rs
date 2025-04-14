@@ -342,7 +342,7 @@ impl From<Response> for Vec<u8> {
         } else {
             result.extend(headers_b);
             result.extend(CRLF);
-            
+
         }
 
         body.into_iter().for_each(|b| {

@@ -21,9 +21,6 @@ fn main() {
             Ok(mut stream) => {
                 loop {
                     let request = Request::read(&mut stream).unwrap();
-                    if request.connection() == Some(Connection::Close) {
-                        break;
-                    } else {
                         let r = &mut Router::new();
                         let router = router(r);
 
@@ -35,20 +32,28 @@ fn main() {
                                 let h = Arc::clone(&handler);
                                 let mut r = h.handle(&request).unwrap();
 
-                                match request.headers().accept_encoding() {
-                                    Some(ae) if ae.has_gzip() => Ok(r
+                                 let mut r = match request.headers().accept_encoding() {
+                                    Some(ae) if ae.has_gzip() => r
                                         .add_header(Header::content_encoding(Encoding::Gzip))
-                                        .with_body(|rb| gzip_encode(rb.into()).unwrap().try_into().unwrap())
-                                        .clone()
-                                        .into()),
-                                    _ => Ok(r.into()),
-                                }
+                                        .with_body(|rb| gzip_encode(rb.into()).unwrap().try_into().unwrap()),
+                                    _ => r
+                                };
+                                let r = match request.headers().connection() {
+                                    Some(Connection::Close) =>
+                                    r.add_header(Header::connection(Connection::Close)).clone(),
+                                    _ => r
+
+                                };
+                                Ok(r.into())
                             }
                         };
                         #[allow(clippy::unwrap_in_result)]
                         stream.write_all(response.unwrap().as_ref()).unwrap();
+                        if request.headers.connection() == Some(Connection::Close) {
+                            break
+                        }
                     }
-                }
+
             }
             Err(e) => {
                 println!("error: {}", e);
