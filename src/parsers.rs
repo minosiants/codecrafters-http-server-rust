@@ -7,10 +7,7 @@ use nom::multi::{many0, separated_list0};
 use nom::sequence::{preceded, terminated};
 use nom::{IResult, Parser};
 
-use crate::{
-    ContentType, Encoding, Error, Header, Headers, HttpMethod, Request, RequestBody, RequestLine,
-    RequestTarget, Result,
-};
+use crate::{Connection, ContentType, Encoding, Error, Header, Headers, HttpMethod, Request, RequestBody, RequestLine, RequestTarget, Result};
 
 fn parse_http_method(input: &[u8]) -> IResult<&[u8], crate::types::HttpMethod> {
     alt((
@@ -91,6 +88,9 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
         }
     });
 
+    let connection = (tag(&"Connection: "[..]), rest)
+        .map_res(to_string(|v| Ok(Some(Header::connection(Connection::Close)))));
+
     let (input, headers) = many0(map(
         (
             map_parser(
@@ -103,6 +103,7 @@ fn parse_headers(input: &[u8]) -> IResult<&[u8], Vec<Header>> {
                     content_type,
                     content_length,
                     content_encoding,
+                    connection
                 )),
             ),
             tag(&b"\r\n"[..]),

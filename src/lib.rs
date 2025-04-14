@@ -1,4 +1,4 @@
-mod encoder;
+
 mod error;
 mod parsers;
 mod request;

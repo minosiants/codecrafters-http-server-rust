@@ -105,6 +105,12 @@ impl AcceptEncoding {
 }
 #[derive(Debug, Clone, From, Deref, Copy, PartialEq)]
 pub struct ContentEncoding(Encoding);
+
+
+#[derive(Debug, Clone, From, Copy, PartialEq)]
+pub enum Connection{
+    Close
+}
 #[derive(Debug, Clone, From, PartialEq)]
 #[from(forward)]
 pub enum Header {
@@ -115,6 +121,7 @@ pub enum Header {
     ContentLength(ContentLength),
     AcceptEncoding(AcceptEncoding),
     ContentEncoding(ContentEncoding),
+    Connection(Connection)
 }
 impl Header {
     pub fn host(value: &str) -> Self {
@@ -137,6 +144,9 @@ impl Header {
     }
     pub fn content_encoding(value: Encoding) -> Self {
         Self::ContentEncoding(ContentEncoding(value))
+    }
+    pub fn connection(value:Connection) -> Self{
+        Self::Connection(value)
     }
 }
 impl From<Header> for Vec<u8> {
@@ -168,6 +178,12 @@ impl From<Header> for Vec<u8> {
                 };
                 format!("Content-Encoding:{}", enc).as_bytes().to_vec()
             }
+            Header::Connection(c) => {
+               let action =  match c {
+                   Connection::Close => "close"
+               };
+                format!("Connection:{}", action).as_bytes().to_vec()
+            }
         }
     }
 }
@@ -190,6 +206,12 @@ impl Headers {
     pub fn accept_encoding(&self) -> Option<AcceptEncoding> {
         self.clone().0.into_iter().find_map(|v| match v {
             Header::AcceptEncoding(v) => Some(v),
+            _ => None,
+        })
+    }
+    pub fn connection(&self) -> Option<Connection> {
+        self.clone().0.into_iter().find_map(|v| match v {
+            Header::Connection(v) => Some(v),
             _ => None,
         })
     }
@@ -319,8 +341,10 @@ impl From<Response> for Vec<u8> {
             result.extend(CRLF);
         } else {
             result.extend(headers_b);
+            result.extend(CRLF);
+            
         }
-        result.extend(CRLF);
+
         body.into_iter().for_each(|b| {
             let v: Vec<u8> = b.into();
             result.extend(v)

@@ -1,9 +1,10 @@
-use crate::{parse_request, Headers, HttpMethod, HttpVersion, Result, UserAgent};
+use crate::{parse_request, Headers, HttpMethod, HttpVersion, Result, UserAgent, Connection};
 use derive_more::{Deref, From, Into};
 
 use regex::Regex;
 use std::io::{BufReader, Read};
 use std::net::TcpStream;
+use nom::combinator::Opt;
 
 #[derive(Debug, Clone, PartialEq, From, Deref)]
 pub struct RequestTarget(pub String);
@@ -35,6 +36,9 @@ impl Request {
     }
     pub fn user_agent(&self) -> Option<UserAgent> {
         self.headers.user_agent()
+    }
+    pub fn connection(&self) -> Option<Connection> {
+        self.headers.connection()
     }
 
     fn split_target(&self) -> (String, String) {
