@@ -4,6 +4,7 @@ mod parsers;
 mod request;
 mod route;
 mod types;
+mod draft;
 
 pub use error::*;
 pub use parsers::*;

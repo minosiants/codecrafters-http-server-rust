@@ -22,6 +22,8 @@ pub enum Error {
     IOError(#[from] std::io::Error),
     #[error("Parser error: {0}")]
     ParseInt(#[from] ParseIntError),
+    #[error("Cant handle request")]
+    CantHandle
 }
 
 pub trait Context<T, E> {
