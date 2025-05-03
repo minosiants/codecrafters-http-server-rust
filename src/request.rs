@@ -1,10 +1,11 @@
-use crate::{parse_request, Headers, HttpMethod, HttpVersion, Result, UserAgent, Connection};
+use crate::{
+    parse_request, Connection, Context, Headers, HttpMethod, HttpVersion, Result, UserAgent,
+};
 use derive_more::{Deref, From, Into};
 
 use regex::Regex;
-use std::io::{BufReader, Read};
-use std::net::TcpStream;
-use nom::combinator::Opt;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, PartialEq, From, Deref)]
 pub struct RequestTarget(pub String);
@@ -43,7 +44,8 @@ impl Request {
 
     fn split_target(&self) -> (String, String) {
         let p = self.target().0.clone();
-        let req_path = Regex::new(r"^(?<route>/\w+)/*(?<path>\w+)*").unwrap();
+        let req_path = Regex::new(r"^(?<route>/[^/]+)((?:/)(?<path>[^/]+))?$").unwrap();
+        //   let req_path = Regex::new(r"^(?<route>/[^/]+)(?:/)(?<path>[^/]+)$").unwrap();
 
         match req_path.captures(p.as_str()) {
             None => ("/".to_string(), "".to_string()),
@@ -68,21 +70,19 @@ impl Request {
     pub fn headers(&self) -> &Headers {
         &self.headers
     }
-    pub fn read(stream: &mut TcpStream) -> Result<Self> {
-        let input = Self::read_request(stream)?;
-        parse_request(&input)
+    pub async fn read(stream: &mut TcpStream) -> Result<Self> {
+        let input = Self::read_request(stream).await.with_context(|| "");
+        parse_request(&input?)
     }
-    fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
-        let mut reader = BufReader::new(stream);
+    async fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         let mut req = Vec::new();
         let mut buffer = [0; 1024];
         loop {
-            let n = reader.read(&mut buffer)?;
+            let n = stream.read(&mut buffer).await?;
             if n == 0 {
                 break; // EOF
             }
             req.extend_from_slice(&buffer[..n]);
-            // Check for end of headers
             if req.windows(4).any(|w| w == b"\r\n\r\n") {
                 break;
             }

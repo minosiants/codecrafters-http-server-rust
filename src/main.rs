@@ -1,137 +1,108 @@
-use codecrafters_http_server::{get, post, Context, Encoding, Header, Request, Response, Result, Router, StatusLine, Connection};
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::fs::File;
-use std::io::{Read, Write};
 #[allow(unused_imports)]
-use std::net::TcpListener;
 use std::sync::Arc;
-use std::thread;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 
-fn main() {
+use codecrafters_http_server::{
+    close_connection, gzip, lift, mk_response, not_found, ok, path, req_body, route, state,
+    user_agent as get_user_agent, Complete, Connection, Context, Endpoint, FileOps, Request,
+    RequestBody, Result, State, StatusCode, UnitT, UserAgent,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
     // Uncomment this block to pass the first stage
     //
-    let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
-
-    for stream in listener.incoming() {
-        thread::spawn(move || match stream {
-            Ok(mut stream) => {
-                loop {
-                    let request = Request::read(&mut stream).unwrap();
-                        let r = &mut Router::new();
-                        let router = router(r);
-
-                        let response: Result<Vec<u8>> = match router
-                            .find_route(request.get_route().as_ref(), request.http_method())
-                        {
-                            None => Ok(Response(StatusLine::not_found(), vec![], None).into()),
-                            Some(handler) => {
-                                let h = Arc::clone(&handler);
-                                let mut r = h.handle(&request).unwrap();
-
-                                 let mut r = match request.headers().accept_encoding() {
-                                    Some(ae) if ae.has_gzip() => r
-                                        .add_header(Header::content_encoding(Encoding::Gzip))
-                                        .with_body(|rb| gzip_encode(rb.into()).unwrap().try_into().unwrap()),
-                                    _ => r
-                                };
-                                let r = match request.headers().connection() {
-                                    Some(Connection::Close) =>
-                                    r.add_header(Header::connection(Connection::Close)).clone(),
-                                    _ => r
-
-                                };
-                                Ok(r.into())
-                            }
-                        };
-                        #[allow(clippy::unwrap_in_result)]
-                        stream.write_all(response.unwrap().as_ref()).unwrap();
-                        if request.headers.connection() == Some(Connection::Close) {
-                            break
-                        }
-                    }
-
-            }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        });
-
+    let listener = TcpListener::bind("127.0.0.1:4221")
+        .await
+        .with_context(|| "")?;
+    loop {
+        let (stream, _) = listener.accept().await.with_context(|| "")?;
+        tokio::spawn(handle(stream));
     }
 }
 
-pub fn read(path: &str) -> Result<Vec<u8>> {
-    let mut file = File::open(path).context("Open file {path}")?; // Open the file
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).context("Reading file")?; // Read file contents into buffer
-    Ok(buffer)
-}
-
-pub fn write(path: &str, data: Vec<u8>) -> Result<()> {
-    let mut file = File::create(path)?;
-    file.write_all(&data).context("write to file")
-}
-
-fn gzip_encode(b: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(b)?;
-    let res = enc.finish()?;
-    Ok(res)
-}
-
-fn  router<'a>(router:&'a
-mut Router) -> &'a Router<'a> {
-    router
-        .route(
-            "/",
-            get(Arc::new(|_: &Request| {
-                Ok(Response(StatusLine::ok(), vec![], None))
-            })),
-        )
-        .route(
-            "/user-agent",
-            get(Arc::new(|request: &Request| {
-                Response::ok(
-                    request
-                        .user_agent()
-                        .map(|v| v.0)
-                        .get_or_insert("".to_string()),
-                )
-            })),
-        )
-        .route(
-            "/echo",
-            get(Arc::new(|request: &Request| {
-                Response::ok(request.get_path().as_str())
-            })),
-        )
-        .route(
-            "/files",
-            get(Arc::new(|request: &Request| {
-                let file = format!(
-                    "/tmp/data/codecrafters.io/http-server-tester/{}",
-                    request.get_path()
-                );
-                match read(file.as_ref()) {
-                    Ok(data) => Response::ok_bin(data.as_slice()),
-                    Err(_) => Ok(Response(StatusLine::not_found(), vec![], None)),
+async fn handle(mut stream: TcpStream) -> Result<()> {
+    loop {
+        let request = Request::read(&mut stream).await?;
+        let state = routes().handle(State::incomplete(request))?.0;
+        match state {
+            State::Incomplete(_) => {}
+            State::Complete(Complete(req, resp)) => {
+                let bytes: Vec<u8> = resp.into();
+                stream.write_all(bytes.as_ref()).await.with_context(|| "")?;
+                stream.flush().await.with_context(|| "flushing ")?;
+                if req.headers.connection() == Some(Connection::Close) {
+                    break;
                 }
-            })),
+            }
+        }
+    }
+    Ok(())
+}
+pub fn routes() -> impl Endpoint<Output = UnitT> {
+    let v = user_agent()
+        .or(route::get("/echo").set_response(path().flat_map(|v| ok(v))))
+        .or(get_file())
+        .or(post_file())
+        .or(route::get("/").set_response(ok("")))
+        .or(state().set_response(not_found("")))
+        .and(gzip().and(close_connection()))
+        .unit();
+
+    v
+}
+fn user_agent() -> impl Endpoint<Output = UnitT> {
+    let response = |v: Option<UserAgent>| {
+        println!("user agent: {:?}", v);
+        ok(v.map(|v| v.0).unwrap_or("".to_string()))
+    };
+    route::get("/user-agent").set_response(get_user_agent().flat_map(response))
+}
+
+fn get_file() -> impl Endpoint<Output = UnitT> {
+    let read = |file: String| {
+        lift(
+            match format!("/tmp/data/codecrafters.io/http-server-tester/{}", file)
+                .as_str()
+                .read()
+            {
+                Ok(data) => mk_response(data, StatusCode::SC200),
+                Err(_) => mk_response("", StatusCode::SC404),
+            },
         )
-        .route(
-            "/files",
-            post(Arc::new(|request: &Request| {
-                let file = format!(
-                    "/tmp/data/codecrafters.io/http-server-tester/{}",
-                    request.get_path()
-                );
-                match write(file.as_ref(), request.body().unwrap().into()) {
-                    Ok(_) => Ok(Response(StatusLine::created(), vec![], None)),
-                    Err(_) => Ok(Response(StatusLine::created(), vec![], None)),
-                }
-            })),
+    };
+    route::get("/files").set_response(path().flat_map(read))
+}
+fn post_file() -> impl Endpoint<Output = UnitT> {
+    let response = |(file, body): (String, Option<RequestBody>)| {
+        lift(
+            match format!("/tmp/data/codecrafters.io/http-server-tester/{}", file)
+                .as_str()
+                .write(body.unwrap().0)
+            {
+                Ok(_) => mk_response("", StatusCode::SC201),
+                Err(_) => mk_response("", StatusCode::SC404),
+            },
         )
+    };
+    route::post("/files").set_response(path().and(req_body()).flat_map(response))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use codecrafters_http_server::parse_request;
+
+    #[test]
+    fn test_echo() -> Result<()> {
+        let req = b"GET /user-agent HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: pear/raspberry-raspberry\r\n\r\n";
+        let state = State::incomplete(parse_request(req)?);
+        let (s, _) = routes().handle(state)?;
+        println!("state: {:?}", s);
+        Ok(())
+    }
 }

@@ -15,7 +15,7 @@ impl From<HttpVersion> for Vec<u8> {
 }
 
 #[derive(Debug, Copy, Clone)]
-enum StatusCode {
+pub enum StatusCode {
     SC200,
     SC201,
     SC404,
@@ -102,14 +102,20 @@ impl AcceptEncoding {
     pub fn has_gzip(&self) -> bool {
         self.0.contains(&Encoding::Gzip)
     }
+    pub fn gzip(&self) -> Option<Encoding> {
+        if self.has_gzip() {
+            Some(Encoding::Gzip)
+        } else {
+            None
+        }
+    }
 }
 #[derive(Debug, Clone, From, Deref, Copy, PartialEq)]
 pub struct ContentEncoding(Encoding);
 
-
 #[derive(Debug, Clone, From, Copy, PartialEq)]
-pub enum Connection{
-    Close
+pub enum Connection {
+    Close,
 }
 #[derive(Debug, Clone, From, PartialEq)]
 #[from(forward)]
@@ -121,7 +127,7 @@ pub enum Header {
     ContentLength(ContentLength),
     AcceptEncoding(AcceptEncoding),
     ContentEncoding(ContentEncoding),
-    Connection(Connection)
+    Connection(Connection),
 }
 impl Header {
     pub fn host(value: &str) -> Self {
@@ -145,7 +151,7 @@ impl Header {
     pub fn content_encoding(value: Encoding) -> Self {
         Self::ContentEncoding(ContentEncoding(value))
     }
-    pub fn connection(value:Connection) -> Self{
+    pub fn connection(value: Connection) -> Self {
         Self::Connection(value)
     }
 }
@@ -179,9 +185,9 @@ impl From<Header> for Vec<u8> {
                 format!("Content-Encoding:{}", enc).as_bytes().to_vec()
             }
             Header::Connection(c) => {
-               let action =  match c {
-                   Connection::Close => "close"
-               };
+                let action = match c {
+                    Connection::Close => "close",
+                };
                 format!("Connection:{}", action).as_bytes().to_vec()
             }
         }
@@ -302,14 +308,15 @@ impl Response {
     }
     pub fn add_header(&mut self, header: Header) -> &Self {
         self.1.push(header);
+        println!("push {:?}", self);
         self
     }
-    pub fn with_body(&self, f: impl Fn(&ResponseBody) -> ResponseBody) -> Self {
+    pub fn with_body(&self, f: impl Fn(&ResponseBody) -> Result<ResponseBody>) -> Result<Self> {
         let Response(status_line, headers, body) = self;
         match body {
-            None => Self(*status_line, headers.clone(), None),
+            None => Ok(Self(*status_line, headers.clone(), None)),
             Some(b) => {
-                let rb = f(b);
+                let rb = f(b)?;
                 let headers = headers
                     .iter()
                     .map(|h| match h {
@@ -317,7 +324,7 @@ impl Response {
                         h => h.clone(),
                     })
                     .collect();
-                Self(*status_line, headers, Some(rb))
+                Ok(Self(*status_line, headers, Some(rb)))
             }
         }
     }
@@ -342,7 +349,6 @@ impl From<Response> for Vec<u8> {
         } else {
             result.extend(headers_b);
             result.extend(CRLF);
-
         }
 
         body.into_iter().for_each(|b| {
@@ -358,4 +364,19 @@ impl From<Response> for Vec<u8> {
 pub enum HttpMethod {
     Get,
     Post,
+}
+
+impl HttpMethod {
+    pub fn is_get(&self) -> bool {
+        match self {
+            HttpMethod::Get => true,
+            _ => false,
+        }
+    }
+    pub fn is_post(&self) -> bool {
+        match self {
+            HttpMethod::Post => true,
+            _ => false,
+        }
+    }
 }

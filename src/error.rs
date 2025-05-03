@@ -8,7 +8,7 @@ use thiserror::Error;
 
 pub type Result<E> = std::result::Result<E, Error>;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum Error {
     #[error("General Error")]
     GeneralError(String),
@@ -18,12 +18,10 @@ pub enum Error {
     Utf8ConversionError(#[from] Utf8Error),
     #[error("Failed to convert bytes to string: {0}")]
     FromUtf8ConversionError(#[from] FromUtf8Error),
-    #[error("Failed to convert bytes to string: {0}")]
-    IOError(#[from] std::io::Error),
     #[error("Parser error: {0}")]
     ParseInt(#[from] ParseIntError),
     #[error("Cant handle request")]
-    CantHandle
+    CantHandle,
 }
 
 pub trait Context<T, E> {
