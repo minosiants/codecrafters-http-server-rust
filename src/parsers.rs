@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::bytes::{is_not, take_until};
@@ -126,17 +127,14 @@ pub fn parse_request(input: &[u8]) -> Result<Request> {
             Request {
                 request_line,
                 headers: h,
-                body: Some(RequestBody(body.to_vec())),
+                body: Some(RequestBody(Bytes::from(body.to_vec()))),
             }
         },
     )
     .parse(input);
     match res {
         Ok((_, request)) => Ok(request),
-        Err(e) => {
-            println!("Error {:?}", e);
-            Err(Error::GeneralError("Parser error".to_string()))
-        }
+        Err(_) => Err(Error::GeneralError("Parser error".to_string())),
     }
 }
 
@@ -149,7 +147,7 @@ mod tests {
     #[test]
     fn test_decode_request_get() -> crate::Result<()> {
         let req = b"GET /index.html HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
-        let result = map(
+        let _result = map(
             (parse_request_line, crlf, parse_headers, crlf),
             |(request_line, _, headers, _)| Request {
                 request_line,
@@ -158,15 +156,13 @@ mod tests {
             },
         )
         .parse(req);
-
-        println!("resel {:?}", result);
         Ok(())
     }
 
     #[test]
     fn test_decod_request_post() -> Result<()> {
         let req = b"POST /files/orange_pear_banana_strawberry HTTP/1.1\r\nHost: localhost:4221\r\nContent-Length: 63\r\nContent-Type: application/octet-stream\r\n\r\n";
-        let result = map(
+        let _result = map(
             (parse_request_line, crlf, parse_headers, crlf),
             |(request_line, _, headers, _)| Request {
                 request_line,
@@ -175,7 +171,6 @@ mod tests {
             },
         )
         .parse(req);
-        println!("resel {:?}", result);
         Ok(())
     }
     #[test]
@@ -191,7 +186,6 @@ mod tests {
             },
         )
         .parse(req);
-        println!("{:?}", result);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().1.get_route(), "/echo".to_string());
 

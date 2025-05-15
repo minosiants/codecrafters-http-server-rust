@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::sync::Arc;
+
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -28,11 +29,15 @@ async fn main() -> Result<()> {
 async fn handle(mut stream: TcpStream) -> Result<()> {
     loop {
         let request = Request::read(&mut stream).await?;
-        let state = routes().handle(State::incomplete(request))?.0;
+        let state = routes().handle(State::incomplete(Arc::new(request)))?.0;
         match state {
             State::Incomplete(_) => {}
             State::Complete(Complete(req, resp)) => {
-                let bytes: Vec<u8> = resp.into();
+                let bytes: Vec<u8> = {
+                    let bytes1 = resp.borrow();
+                    let bytes = bytes1.clone();
+                    bytes.into()
+                };
                 stream.write_all(bytes.as_ref()).await.with_context(|| "")?;
                 stream.flush().await.with_context(|| "flushing ")?;
                 if req.headers.connection() == Some(Connection::Close) {
@@ -56,10 +61,8 @@ pub fn routes() -> impl Endpoint<Output = UnitT> {
     v
 }
 fn user_agent() -> impl Endpoint<Output = UnitT> {
-    let response = |v: Option<UserAgent>| {
-        println!("user agent: {:?}", v);
-        ok(v.map(|v| v.0).unwrap_or("".to_string()))
-    };
+    let response = |v: Option<UserAgent>| ok(v.map(|v| v.0).unwrap_or("".to_string()));
+
     route::get("/user-agent").set_response(get_user_agent().flat_map(response))
 }
 
@@ -94,15 +97,15 @@ fn post_file() -> impl Endpoint<Output = UnitT> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use codecrafters_http_server::parse_request;
+
+    use super::*;
 
     #[test]
     fn test_echo() -> Result<()> {
         let req = b"GET /user-agent HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: pear/raspberry-raspberry\r\n\r\n";
-        let state = State::incomplete(parse_request(req)?);
+        let state = State::incomplete(Arc::new(parse_request(req)?));
         let (s, _) = routes().handle(state)?;
-        println!("state: {:?}", s);
         Ok(())
     }
 }

@@ -1,8 +1,8 @@
 use crate::{
     parse_request, Connection, Context, Headers, HttpMethod, HttpVersion, Result, UserAgent,
 };
+use bytes::{Bytes, BytesMut};
 use derive_more::{Deref, From, Into};
-
 use regex::Regex;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -19,7 +19,7 @@ impl RequestTarget {
 pub struct RequestLine(pub HttpMethod, pub RequestTarget, pub HttpVersion);
 
 #[derive(Debug, Clone, From, Deref, Into)]
-pub struct RequestBody(pub Vec<u8>);
+pub struct RequestBody(pub Bytes);
 
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -74,8 +74,8 @@ impl Request {
         let input = Self::read_request(stream).await.with_context(|| "");
         parse_request(&input?)
     }
-    async fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
-        let mut req = Vec::new();
+    async fn read_request(stream: &mut TcpStream) -> std::io::Result<Bytes> {
+        let mut req = BytesMut::new();
         let mut buffer = [0; 1024];
         loop {
             let n = stream.read(&mut buffer).await?;
@@ -87,6 +87,6 @@ impl Request {
                 break;
             }
         }
-        Ok(req)
+        Ok(req.freeze())
     }
 }

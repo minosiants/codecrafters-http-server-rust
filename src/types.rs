@@ -1,5 +1,6 @@
 use crate::Error::GeneralError;
 use crate::{Error, Result};
+use bytes::Bytes;
 use derive_more::{Deref, From};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -223,9 +224,9 @@ impl Headers {
     }
 }
 #[derive(Debug, Clone)]
-pub struct ResponseBody(pub Vec<u8>);
+pub struct ResponseBody(pub Bytes);
 
-impl From<ResponseBody> for Vec<u8> {
+impl From<ResponseBody> for Bytes {
     fn from(value: ResponseBody) -> Self {
         value.0
     }
@@ -237,7 +238,7 @@ impl<'a> From<&'a ResponseBody> for &'a [u8] {
     }
 }
 
-impl TryInto<ResponseBody> for Vec<u8> {
+impl TryInto<ResponseBody> for Bytes {
     type Error = Error;
 
     fn try_into(self) -> Result<ResponseBody> {
@@ -293,7 +294,7 @@ impl Response {
                 Header::ContentType(ContentType::TextPlain),
                 Header::ContentLength(ContentLength(body.len() as u32)),
             ],
-            Some(ResponseBody(body.as_bytes().to_vec())),
+            Some(ResponseBody(Bytes::from(body.as_bytes().to_vec()))),
         ))
     }
     pub fn ok_bin(body: &[u8]) -> Result<Self> {
@@ -303,18 +304,17 @@ impl Response {
                 Header::ContentType(ContentType::OctetStream),
                 Header::ContentLength(ContentLength(body.len() as u32)),
             ],
-            Some(ResponseBody(body.to_vec())),
+            Some(ResponseBody(Bytes::from(body.to_vec()))),
         ))
     }
     pub fn add_header(&mut self, header: Header) -> &Self {
         self.1.push(header);
-        println!("push {:?}", self);
         self
     }
-    pub fn with_body(&self, f: impl Fn(&ResponseBody) -> Result<ResponseBody>) -> Result<Self> {
-        let Response(status_line, headers, body) = self;
+    pub fn set_body(&mut self, f: impl Fn(&ResponseBody) -> Result<ResponseBody>) -> Result<&Self> {
+        let Response(_, headers, body) = self;
         match body {
-            None => Ok(Self(*status_line, headers.clone(), None)),
+            None => Ok(self),
             Some(b) => {
                 let rb = f(b)?;
                 let headers = headers
@@ -324,7 +324,9 @@ impl Response {
                         h => h.clone(),
                     })
                     .collect();
-                Ok(Self(*status_line, headers, Some(rb)))
+                self.1 = headers;
+                self.2 = Some(rb);
+                Ok(self)
             }
         }
     }
@@ -352,8 +354,8 @@ impl From<Response> for Vec<u8> {
         }
 
         body.into_iter().for_each(|b| {
-            let v: Vec<u8> = b.into();
-            result.extend(v)
+            let v: Bytes = b.into();
+            result.extend(v.to_vec())
         });
 
         result

@@ -1,20 +1,21 @@
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::io::Write;
+use std::sync::Arc;
 
+use bytes::Bytes;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 use crate::{
-    AcceptEncoding, Connection, ContentType, Context, Encoding, Error,
-    Header, Headers, HttpMethod, Request, RequestBody, Response, ResponseBody, Result, StatusCode,
-    StatusLine, UserAgent,
+    AcceptEncoding, Connection, ContentType, Context, Encoding, Error, Header, Headers, HttpMethod,
+    Request, RequestBody, Response, ResponseBody, Result, StatusCode, StatusLine, UserAgent,
 };
 
 #[derive(Debug, Clone)]
-pub
-enum Body<'a> {
+pub enum Body<'a> {
     Text(&'a str),
-    Bin(&'a [u8]),
+    Bin(Bytes),
     Empty,
 }
 
@@ -56,30 +57,32 @@ impl<'a> AsBody for String {
         }
     }
 }
-impl AsBody for Vec<u8> {
+impl AsBody for Bytes {
     fn body(&self) -> Body {
         if self.len() != 0 {
-            Body::Bin(self)
+            Body::Bin(self.clone())
         } else {
             Body::Empty
         }
     }
 }
-impl<'a> Body<'a> {
-    fn to_bin(self) -> Vec<u8> {
+impl Body<'_> {
+    fn to_bin(self) -> Bytes {
         match self {
-            Body::Text(str) => str.as_bytes().to_vec(),
-            Body::Bin(b) => b.to_vec(),
-            Body::Empty => vec![],
+            Body::Text(str) => Bytes::from(str.as_bytes().to_vec()),
+            Body::Bin(b) => b,
+            Body::Empty => Bytes::new(),
         }
     }
 }
+type RequestRef = Arc<Request>;
+type ResponseRef = RefCell<Response>;
 #[derive(Debug, Clone)]
 pub struct New();
 #[derive(Debug, Clone)]
-pub struct Incomplete(Request);
+pub struct Incomplete(RequestRef);
 #[derive(Debug, Clone)]
-pub struct Complete(pub Request, pub Response);
+pub struct Complete(pub RequestRef, pub ResponseRef);
 #[derive(Debug, Clone)]
 pub enum State {
     //New(New),
@@ -88,20 +91,20 @@ pub enum State {
 }
 
 impl State {
-    pub fn incomplete(r: Request) -> State {
-        Self::Incomplete(Incomplete(r))
+    pub fn incomplete(r: RequestRef) -> State {
+        Self::Incomplete(Incomplete(Arc::clone(&r)))
     }
-    pub fn complete(req: Request, resp: Response) -> State {
-        Self::Complete(Complete(req, resp))
+    pub fn complete(req: RequestRef, resp: ResponseRef) -> State {
+        Self::Complete(Complete(Arc::clone(&req), RefCell::clone(&resp)))
     }
-    pub fn request(&self) -> &Request {
+    pub fn request(&self) -> RequestRef {
         match self {
-            State::Incomplete(Incomplete(r)) => r,
-            State::Complete(Complete(r, _)) => r,
+            State::Incomplete(Incomplete(r)) => Arc::clone(&r),
+            State::Complete(Complete(r, _)) => Arc::clone(&r),
         }
     }
-    fn set_response(&self, resp: &Response) -> State {
-        State::complete(self.request().clone(), resp.clone())
+    fn set_response(&self, resp: ResponseRef) -> State {
+        State::complete(self.request(), resp)
     }
 }
 
@@ -193,14 +196,14 @@ pub trait Endpoint {
     }
     fn set_response<G>(self, g: G) -> SetResponse<Self, G>
     where
-        G: Endpoint<Output = Response>,
+        G: Endpoint<Output = ResponseRef>,
         Self: Sized,
     {
         SetResponse { h: self, g }
     }
     fn modify_response<F>(self, f: F) -> ModifyResponse<Self, F>
     where
-        F: Fn(Response) -> Result<Response>,
+        F: Fn(ResponseRef) -> Result<ResponseRef>,
         Self: Sized,
     {
         ModifyResponse { h: self, f }
@@ -354,7 +357,6 @@ where
     fn handle(&self, r: State) -> Result<(State, Self::Output)> {
         let (s, o1) = self.h.handle(r)?;
         let (ss, o2) = self.g.handle(s)?;
-        println!("and {:?}", ss);
         Ok((ss, (o1, o2)))
     }
 }
@@ -444,14 +446,14 @@ impl<H, G, O1> Endpoint for SetResponse<H, G>
 where
     O1: Debug + Clone,
     H: Endpoint<Output = O1>,
-    G: Endpoint<Output = Response>,
+    G: Endpoint<Output = ResponseRef>,
 {
     type Output = UnitT;
 
     fn handle(&self, r: State) -> Result<(State, Self::Output)> {
         let (s, _) = self.h.handle(r)?;
         let (ss, resp) = self.g.handle(s)?;
-        Ok((ss.set_response(&resp), UnitT))
+        Ok((ss.set_response(resp), UnitT))
     }
 }
 
@@ -464,17 +466,15 @@ impl<H, O, F> Endpoint for ModifyResponse<H, F>
 where
     O: Debug + Clone,
     H: Endpoint<Output = O>,
-    F: Fn(Response) -> Result<Response>,
+    F: Fn(ResponseRef) -> Result<ResponseRef>,
 {
     type Output = O;
 
     fn handle(&self, r: State) -> Result<(State, Self::Output)> {
         let (s, o) = self.h.handle(r)?;
         let ss = match s {
-            State::Incomplete(Incomplete(req)) => State::incomplete(req.clone()),
-            State::Complete(Complete(req, res)) => {
-                State::complete(req.clone(), (self.f)(res.clone())?)
-            }
+            State::Incomplete(Incomplete(req)) => State::incomplete(req),
+            State::Complete(Complete(req, res)) => State::complete(req, (self.f)(res)?),
         };
         Ok((ss, o))
     }
@@ -493,11 +493,11 @@ impl Endpoint for S {
 pub fn state() -> impl Endpoint<Output = State> {
     S {}
 }
-pub fn request() -> impl Endpoint<Output = Request> {
+pub fn request() -> impl Endpoint<Output = RequestRef> {
     state().map(|v| v.request().clone())
 }
 pub fn req_body() -> impl Endpoint<Output = Option<RequestBody>> {
-    request().map(|v| v.body)
+    request().map(|v| v.body.clone())
 }
 pub fn user_agent() -> impl Endpoint<Output = Option<UserAgent>> {
     state().map(|v| v.request().user_agent())
@@ -512,7 +512,7 @@ pub fn http_method() -> impl Endpoint<Output = HttpMethod> {
     request().map(|v| v.http_method())
 }
 pub fn req_headers() -> impl Endpoint<Output = Headers> {
-    request().map(|v| v.headers)
+    request().map(|v| v.headers.clone())
 }
 
 pub fn route_for(path: &str) -> impl Endpoint<Output = String> + use<'_> {
@@ -520,7 +520,7 @@ pub fn route_for(path: &str) -> impl Endpoint<Output = String> + use<'_> {
 }
 pub fn modify_response<F>(f: F) -> impl Endpoint<Output = UnitT>
 where
-    F: Fn(Response) -> Result<Response> + 'static,
+    F: Fn(ResponseRef) -> Result<ResponseRef> + 'static,
 {
     state().modify_response(move |r| f(r)).unit()
 }
@@ -530,19 +530,19 @@ pub fn get() -> impl Endpoint<Output = HttpMethod> {
 pub fn post() -> impl Endpoint<Output = HttpMethod> {
     http_method().stop_if(|v| !HttpMethod::is_post(&v))
 }
-pub fn ok<'a, T>(body: T) -> impl Endpoint<Output = Response> + use<'a, T>
+pub fn ok<'a, T>(body: T) -> impl Endpoint<Output = ResponseRef> + use<'a, T>
 where
     T: AsBody,
 {
     lift(mk_response(body, StatusCode::SC200))
 }
-pub fn not_found<'a, T>(body: T) -> impl Endpoint<Output = Response> + use<'a, T>
+pub fn not_found<'a, T>(body: T) -> impl Endpoint<Output = ResponseRef> + use<'a, T>
 where
     T: AsBody,
 {
     lift(mk_response(body, StatusCode::SC404))
 }
-pub fn mk_response<'a, H>(body: H, code: StatusCode) -> Response
+pub fn mk_response<'a, H>(body: H, code: StatusCode) -> ResponseRef
 where
     H: AsBody,
 {
@@ -562,11 +562,11 @@ where
         Body::Text(_) | Body::Bin(_) => Some(ResponseBody(body.to_bin())),
         Body::Empty => None,
     };
-    Response(
+    RefCell::new(Response(
         sl,
         vec![Header::content_type(ct), Header::content_length(len)],
         body,
-    )
+    ))
 }
 
 struct Lift<T> {
@@ -598,28 +598,31 @@ fn gzip_header() -> impl Endpoint<Output = Option<Encoding>> {
 pub fn gzip() -> impl Endpoint<Output = Option<UnitT>> {
     gzip_header().flat_map_op(|_| {
         modify_response(|r| {
-            r.clone()
-                .add_header(Header::content_encoding(Encoding::Gzip))
-                .with_body(|rb| Ok(ResponseBody(gzip_encode(rb.into())?)))
+            r.borrow_mut()
+                .add_header(Header::content_encoding(Encoding::Gzip));
+            r.borrow_mut()
+                .set_body(|rb| Ok(ResponseBody(gzip_encode(rb.clone().0)?)))?;
+            Ok(r)
         })
     })
 }
+
 fn connection() -> impl Endpoint<Output = Option<Connection>> {
     req_headers().map(|h| h.connection())
 }
 pub fn close_connection() -> impl Endpoint<Output = Option<UnitT>> {
     connection().flat_map_op(|_| {
         modify_response(|r| {
-            Ok(r.clone()
-                .add_header(Header::connection(Connection::Close))
-                .clone())
+            r.borrow_mut()
+                .add_header(Header::connection(Connection::Close));
+            Ok(r)
         })
     })
 }
-fn gzip_encode(b: &[u8]) -> Result<Vec<u8>> {
+fn gzip_encode(b: Bytes) -> Result<Bytes> {
     let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(b).with_context(|| "")?;
-    let res = enc.finish().with_context(|| "")?;
+    enc.write_all(&b).with_context(|| "")?;
+    let res = Bytes::from(enc.finish().with_context(|| "")?);
     Ok(res)
 }
 
@@ -644,28 +647,24 @@ mod test {
         let req = b"GET /user-agent HTTP/1.1\r\nHost: localhost:4221\r\nConnection: close\r\n\r\n";
 
         let req = parse_request(req)?;
-        let state = State::incomplete(req);
+        let state = State::incomplete(Arc::new(req));
         let g = route::get("/user-agent")
             .set_response(ok("okkkkkk"))
             .or(route::get("/").set_response(ok("ok")))
             .and(close_connection());
 
-        let res = g.handle(state)?;
-        println!("{:?}", res.0);
+        let _res = g.handle(state)?;
         Ok(())
     }
     #[test]
     fn test_get_user_agent() -> Result<()> {
         let req = b"GET /user-agent HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
         let req = parse_request(req)?;
-        let state = State::incomplete(req);
+        let state = State::incomplete(Arc::new(req));
         let response = |v: Option<UserAgent>| ok(v.map(|v| v.0).unwrap_or("".to_string()));
-        let (state, r) = route::get("/user-agent")
+        let (_state, _) = route::get("/user-agent")
             .set_response(user_agent().flat_map(response))
             .handle(state)?;
-
-        println!("{:?}", state);
-
         Ok(())
     }
 
@@ -673,39 +672,11 @@ mod test {
     fn test_get_echo() -> Result<()> {
         let req = b"GET /echo/hello HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
         let req = parse_request(req)?;
-        let state = State::incomplete(req);
+        let state = State::incomplete(Arc::new(req));
 
-        let (state, r) = route::get("/echo")
+        let (_, _) = route::get("/echo")
             .set_response(path().flat_map(|v| ok(v)))
             .handle(state)?;
-
-        println!("{:?}", state);
-
         Ok(())
     }
-    #[test]
-    fn test_get_file() -> Result<()> {
-        let req = b"GET /file/hello HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
-        let req = parse_request(req)?;
-        let state = State::incomplete(req);
-        "/tmp/http-server-tester/hello"
-            .create_and_write(b"hello".to_vec())
-            .unwrap();
-        let read = |file: String| {
-            lift(
-                match format!("/tmp/http-server-tester/{}", file).as_str().read() {
-                    Ok(data) => mk_response(data, StatusCode::SC200),
-                    Err(_) => mk_response("", StatusCode::SC404),
-                },
-            )
-        };
-        let (state, r) = route::get("/file")
-            .set_response(path().flat_map(read))
-            .handle(state)?;
-
-        println!("{:?}", state);
-
-        Ok(())
-    }
-
 }
