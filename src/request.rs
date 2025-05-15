@@ -28,7 +28,10 @@ pub struct Request {
     pub body: Option<RequestBody>,
 }
 
-impl Request {
+impl Request
+where
+    Self: Sync + Send,
+{
     pub fn http_method(&self) -> HttpMethod {
         self.request_line.0
     }
