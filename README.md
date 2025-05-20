@@ -16,8 +16,8 @@ After I finished and all CodeCrafters tests were happy I decided to refactor it 
 
 ## ["Build Your Own HTTP server" Challenge](https://app.codecrafters.io/courses/http-server/overview).
 
+<img src="media/http-server-tasks.png" alt="http-server-tasks" width="50%">
 
-![http-server-tasks.png](media%2Fhttp-server-tasks.png)
 
 First, I want to present the results and then shed some light on them.
 
