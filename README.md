@@ -4,7 +4,7 @@
 My primary development expertise lies in JVM-based world. I began with Java and then fortunately
 moved to Scala, and FP. Since then I've been infected with FP :) . Unfortunately, despite Scala is great, its popularity has
 significantly declined in recent years. In Australia, for instance, Scala job opportunities are virtually nonexistent.
-Java is not hot anymore as it used to be thankfully Typescript. Personally, I find coding in Java far less exciting than working 
+Java is not hot anymore as it used to be thankfully to Typescript. Personally, I find coding in Java far less exciting than working 
 with languages that have better FP support. Without a heavy use features like algebraic data types (ADTs), newtypes, pattern matching, and functional 
 composition when you relay a lot on a compiler is difficult to write maintainable and less buggy code.
 
