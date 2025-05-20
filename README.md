@@ -1,38 +1,173 @@
-[![progress-banner](https://backend.codecrafters.io/progress/http-server/3e24f5f3-d7ac-4a19-a203-d44eb459f482)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
 
-This is a starting point for Rust solutions to the
-["Build Your Own HTTP server" Challenge](https://app.codecrafters.io/courses/http-server/overview).
+# CodeCrafters http server in rust
 
-[HTTP](https://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol) is the
-protocol that powers the web. In this challenge, you'll build a HTTP/1.1 server
-that is capable of serving multiple clients.
+My primary development expertise lies in JVM-based world. I began with Java and then fortunately
+moved to Scala, and FP. Since then I've been infected with FP :) . Unfortunately, despite Scala is great, its popularity has
+significantly declined in recent years. In Australia, for instance, Scala job opportunities are virtually nonexistent.
+Java is not hot anymore as it used to be thankfully Typescript. Personally, I find coding in Java far less exciting than working 
+with languages that have better FP support. Without a heavy use features like algebraic data types (ADTs), newtypes, pattern matching, and functional 
+composition when you relay a lot on a compiler is difficult to write maintainable and less buggy code.
 
-Along the way you'll learn about TCP servers,
-[HTTP request syntax](https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html),
-and more.
+Last year, I began exploring Rust and subscribed to https://codecrafters.io/ to deepen my learning. While the subscription is
+somewhat pricey, the platform offers valuable hands-on challenges. I took the first challenge as [codecrafters-kafka-rust](https://github.com/minosiants/codecrafters-kafka-rust)
+challenge, which helped me as an excellent introduction to Rust’s syntax and core concepts. More recently, I completed the
+[codecrafters-http-server-rust](https://github.com/minosiants/codecrafters-http-server-rust) challenge.
+After I finished and all CodeCrafters tests were happy I decided to refactor it to more functional style than it was.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+## ["Build Your Own HTTP server" Challenge](https://app.codecrafters.io/courses/http-server/overview).
 
-# Passing the first stage
 
-The entry point for your HTTP server implementation is in `src/main.rs`. Study
-and uncomment the relevant code, and push your changes to pass the first stage:
+![http-server-tasks.png](media%2Fhttp-server-tasks.png)
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+First, I want to present the results and then shed some light on them.
+
+```rust
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let server = Server::bind("127.0.0.1:4221").await?;
+    server
+        .serve(Arc::new(async move |state| {
+            routes().handle(state).map(|v| v.0)
+        }))
+        .await
+}
+
+pub fn routes() -> impl Endpoint<Output=UnitT> {
+    let v = user_agent()
+        .or(route::get("/echo").set_response(path().flat_map(|v| ok(v))))
+        .or(get_file())
+        .or(post_file())
+        .or(route::get("/").set_response(ok("")))
+        .or(state().set_response(not_found("")))
+        .and(gzip().and(close_connection()))
+        .unit();
+
+    v
+}
+fn user_agent() -> impl Endpoint<Output=UnitT> {
+    let response = |v: Option<UserAgent>| ok(v.map(|v| v.0).unwrap_or("".to_string()));
+
+    route::get("/user-agent").set_response(get_user_agent().flat_map(response))
+}
+
+fn get_file() -> impl Endpoint<Output=UnitT> {
+    let read = |file: String| {
+        lift(
+            match format!("/tmp/data/codecrafters.io/http-server-tester/{}", file)
+                .as_str()
+                .read()
+            {
+                Ok(data) => mk_response(data, StatusCode::SC200),
+                Err(_) => mk_response("", StatusCode::SC404),
+            },
+        )
+    };
+    route::get("/files").set_response(path().flat_map(read))
+}
+fn post_file() -> impl Endpoint<Output=UnitT> {
+    let response = |(file, body): (String, Option<RequestBody>)| {
+        lift(
+            match format!("/tmp/data/codecrafters.io/http-server-tester/{}", file)
+                .as_str()
+                .write(body.unwrap().0)
+            {
+                Ok(_) => mk_response("", StatusCode::SC201),
+                Err(_) => mk_response("", StatusCode::SC404),
+            },
+        )
+    };
+    route::post("/files").set_response(path().and(req_body()).flat_map(response))
+}
 ```
 
-Time to move on to the next stage!
+For parsing HTTP request byte streams, I use an excellent library, [Nom](https://github.com/rust-bakery/nom), a Rust
+parser combinator framework.
+It provides a great example of how combinators are built in Rust. Inspired by this approach, I created my own HTTP
+combinators.
 
-# Stage 2 & beyond
+## Implimentation
 
-Note: This section is for stages 2 and beyond.
+There is a trait `Endpoint` that has one abstract function.
+`fn handle(&self, r: State) -> Result<(State, Self::Output)>;`
+All combinators have to implement it;
 
-1. Ensure you have `cargo (1.85)` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `src/main.rs`. This command compiles your Rust project, so it might be slow
-   the first time you run it. Subsequent runs will be fast.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+I will explain the main idea on the `Map` combinator
+
+```rust
+pub trait Endpoint {
+    type Output: Debug + Clone;
+
+    fn handle(&self, r: State) -> Result<(State, Self::Output)>;
+
+    fn map<F, O2>(self, f: F) -> Map<Self, F>
+    where
+        F: Fn(Self::Output) -> O2,
+        Self: Sized,
+    {
+        Map { g: self, f }
+    }
+}
+
+// Implementation 
+
+pub struct Map<G, F> {
+    g: G,
+    f: F,
+}
+
+impl<G, F, O2> Endpoint for Map<G, F>
+where
+    O2: Debug + Clone,
+    G: Endpoint,
+    F: Fn(G::Output) -> O2,
+{
+    type Output = O2;
+    fn handle(&self, r: State) -> Result<(State, Self::Output)> {
+        let (state, o) = self.g.handle(r)?;
+        Ok((state, (self.f)(o)))
+    }
+}
+//This an example how map is used in a path combinator which returns path of the request 
+
+pub fn path() -> impl Endpoint<Output=String> {
+    request().map(|v| v.get_path())
+}
+```
+
+A few words about `handle`.
+It functions like a State monad: a function that takes a `State` and returns a `State` along with the function's `result`.
+The `State` type has two variants: `Incomplete`, which contains only an HTTP Request, and `Complete`, which includes both a
+Request and a Response.
+
+
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Incomplete(RequestRef);
+#[derive(Debug, Clone)]
+pub struct Complete(pub RequestRef, pub ResponseRef);
+#[derive(Debug, Clone)]
+pub enum State {
+    Incomplete(Incomplete),
+    Complete(Complete),
+}
+```
+
+
+`RequestRef` acts as a Reader, providing read-only access to request data for use in combinators.
+
+`ResponseRef` acts as a State, allowing combinators to modify it.
+
+This outlines the basic concept.
+
+The implementation covers only what was required by the challenge.
+
+I’m eager to hear from the Rust community: Is this a sound approach to functional programming in Rust? Are there better
+patterns or practices I should consider? Your insights would be invaluable as I continue to grow as a Rust developer.
+
+
+
+
+
+
